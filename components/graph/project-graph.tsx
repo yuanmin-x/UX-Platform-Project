@@ -24,6 +24,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type ResearchGraphNode = Node<GraphNodeData, "researchObject">;
@@ -46,6 +47,7 @@ export function ProjectGraph({ projectId }: { projectId: string }) {
 }
 
 function ProjectGraphCanvas({ projectId }: { projectId: string }) {
+  const router = useRouter();
   const [graph, setGraph] = useState<ProjectGraphData | null>(null);
   const [nodes, setNodes] = useState<ResearchGraphNode[]>([]);
   const [edges, setEdges] = useState<RelationshipEdge[]>([]);
@@ -207,6 +209,15 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
   const saveNodePosition: OnNodeDrag<ResearchGraphNode> = useCallback(
     (_event, node) => void saveNodePresentation(node.id, node.position.x, node.position.y),
     [saveNodePresentation],
+  );
+
+  const openWorkspace = useCallback(
+    (event: React.MouseEvent, node: ResearchGraphNode) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(".react-flow__handle, .node-resize-handle, .node-status")) return;
+      router.push(`/projects/${projectId}/objects/${node.id}`);
+    },
+    [projectId, router],
   );
 
   const onConnect = useCallback(
@@ -532,6 +543,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
                   openEdgeMenu(edge.id, { x: event.clientX, y: event.clientY });
                 }}
                 onNodeClick={() => setEdges((currentEdges) => currentEdges.map((edge) => ({ ...edge, selected: false })))}
+                onNodeDoubleClick={openWorkspace}
                 onNodeDragStop={saveNodePosition}
                 onNodesChange={onNodesChange}
                 onPaneClick={() => setEdges((currentEdges) => currentEdges.map((edge) => ({ ...edge, selected: false })))}

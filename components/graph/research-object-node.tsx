@@ -50,6 +50,7 @@ export function ResearchObjectNode({ data, selected }: NodeProps) {
             const rect = event.currentTarget.getBoundingClientRect();
             nodeData.onStatusClick(object.id, { x: rect.left, y: rect.bottom + 4 });
           }}
+          onDoubleClick={(event) => event.stopPropagation()}
           type="button"
         >
           {isCompletionStatus(status) && <span aria-hidden="true">✓ </span>}
