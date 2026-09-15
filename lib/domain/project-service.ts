@@ -23,6 +23,14 @@ function assertObjectType(value: unknown): asserts value is ObjectType {
   }
 }
 
+function assertObjectId(value: string) {
+  const objectId = value.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(objectId)) {
+    throw new Error("A valid Object ID is required to attach an existing Object.");
+  }
+  return objectId;
+}
+
 export async function listProjects(): Promise<Project[]> {
   const { data, error } = await getSupabaseAdmin()
     .from("projects")
@@ -31,6 +39,47 @@ export async function listProjects(): Promise<Project[]> {
 
   if (error) throw error;
   return data as Project[];
+}
+
+export type ExistingObjectSearchResult = Pick<ResearchObject, "id" | "type" | "title" | "status"> & {
+  projects: Array<{ id: string; name: string }>;
+};
+
+export async function searchExistingObjects(input: { query?: string; type?: string }) {
+  const supabase = getSupabaseAdmin();
+  const query = input.query?.trim() ?? "";
+  let request = supabase
+    .from("objects")
+    .select("id, type, title, status, project_objects(project_id, projects(name))")
+    .order("updated_at", { ascending: false })
+    .limit(20);
+
+  if (query) request = request.ilike("title", `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
+  if (input.type) {
+    assertObjectType(input.type);
+    request = request.eq("type", input.type);
+  }
+
+  const { data, error } = await request;
+  if (error) throw error;
+
+  const records = (data ?? []) as unknown as Array<{
+    id: string;
+    type: ObjectType;
+    title: string;
+    status: string | null;
+    project_objects: Array<{ project_id: string; projects: { name: string } | null }>;
+  }>;
+  return records.map((record) => ({
+    id: record.id,
+    type: record.type,
+    title: record.title,
+    status: record.status,
+    projects: (record.project_objects ?? []).map((membership) => ({
+      id: membership.project_id,
+      name: membership.projects?.name ?? "Unnamed Project",
+    })),
+  })) satisfies ExistingObjectSearchResult[];
 }
 
 export async function createProject(input: {
@@ -95,15 +144,33 @@ export async function createOrAttachObject(
   const x = typeof input.x === "number" && Number.isFinite(input.x) ? input.x : 160;
   const y = typeof input.y === "number" && Number.isFinite(input.y) ? input.y : 160;
 
-  if (typeof input.objectId === "string") {
+  if (typeof input.objectId === "string" && input.objectId.trim()) {
+    const objectId = assertObjectId(input.objectId);
+    const { data: existingObject, error: objectError } = await supabase
+      .from("objects")
+      .select("id")
+      .eq("id", objectId)
+      .maybeSingle();
+    if (objectError) throw objectError;
+    if (!existingObject) throw new Error("No Object exists with this Object ID.");
+
+    const { data: existingMembership, error: membershipError } = await supabase
+      .from("project_objects")
+      .select("object_id")
+      .eq("project_id", projectId)
+      .eq("object_id", objectId)
+      .maybeSingle();
+    if (membershipError) throw membershipError;
+    if (existingMembership) throw new Error("This Object is already attached to this Project.");
+
     const { error } = await supabase.from("project_objects").insert({
       project_id: projectId,
-      object_id: input.objectId,
+      object_id: objectId,
       x,
       y,
     });
     if (error) throw error;
-    return input.objectId;
+    return objectId;
   }
 
   assertObjectType(input.type);
@@ -139,13 +206,21 @@ export async function createOrAttachObject(
 
 export async function createRelationship(
   projectId: string,
-  input: { sourceObjectId: unknown; targetObjectId: unknown; label?: unknown },
+  input: {
+    sourceObjectId: unknown;
+    targetObjectId: unknown;
+    label?: unknown;
+    sourceHandle?: unknown;
+    targetHandle?: unknown;
+  },
 ) {
   if (typeof input.sourceObjectId !== "string" || typeof input.targetObjectId !== "string") {
     throw new Error("Both relationship endpoints are required.");
   }
 
   const label = typeof input.label === "string" && input.label.trim() ? input.label.trim() : null;
+  const sourceHandle = typeof input.sourceHandle === "string" && input.sourceHandle.trim() ? input.sourceHandle.trim() : null;
+  const targetHandle = typeof input.targetHandle === "string" && input.targetHandle.trim() ? input.targetHandle.trim() : null;
   const { data, error } = await getSupabaseAdmin()
     .from("relationships")
     .insert({
@@ -153,7 +228,41 @@ export async function createRelationship(
       source_object_id: input.sourceObjectId,
       target_object_id: input.targetObjectId,
       label,
+      source_handle: sourceHandle,
+      target_handle: targetHandle,
     })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return data as Relationship;
+}
+
+export async function updateRelationship(
+  projectId: string,
+  relationshipId: string,
+  input: { sourceObjectId?: unknown; targetObjectId?: unknown; label?: unknown; sourceHandle?: unknown; targetHandle?: unknown },
+) {
+  const update: Record<string, string | null> = {};
+
+  if ("sourceObjectId" in input) {
+    if (typeof input.sourceObjectId !== "string") throw new Error("A valid source object is required.");
+    update.source_object_id = input.sourceObjectId;
+  }
+  if ("targetObjectId" in input) {
+    if (typeof input.targetObjectId !== "string") throw new Error("A valid target object is required.");
+    update.target_object_id = input.targetObjectId;
+  }
+  if ("label" in input) update.label = typeof input.label === "string" && input.label.trim() ? input.label.trim() : null;
+  if ("sourceHandle" in input) update.source_handle = typeof input.sourceHandle === "string" && input.sourceHandle.trim() ? input.sourceHandle.trim() : null;
+  if ("targetHandle" in input) update.target_handle = typeof input.targetHandle === "string" && input.targetHandle.trim() ? input.targetHandle.trim() : null;
+  if (!Object.keys(update).length) throw new Error("No relationship changes were provided.");
+
+  const { data, error } = await getSupabaseAdmin()
+    .from("relationships")
+    .update(update)
+    .eq("project_id", projectId)
+    .eq("id", relationshipId)
     .select("*")
     .single();
 
@@ -202,14 +311,19 @@ export async function updateObjectStatus(objectId: string, status: unknown) {
 
 export async function savePositions(
   projectId: string,
-  positions: Array<{ objectId: string; x: number; y: number }>,
+  positions: Array<{ objectId: string; x: number; y: number; width?: number; height?: number }>,
 ) {
   const supabase = getSupabaseAdmin();
   const results = await Promise.all(
-    positions.map(({ objectId, x, y }) =>
+    positions.map(({ objectId, x, y, width, height }) =>
       supabase
         .from("project_objects")
-        .update({ x, y })
+        .update({
+          x,
+          y,
+          ...(typeof width === "number" ? { width: Math.max(width, 200) } : {}),
+          ...(typeof height === "number" ? { height: Math.max(height, 112) } : {}),
+        })
         .eq("project_id", projectId)
         .eq("object_id", objectId),
     ),

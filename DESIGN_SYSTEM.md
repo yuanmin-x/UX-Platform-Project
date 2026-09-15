@@ -25,13 +25,15 @@ Principles:
 Never use lifecycle status to replace an Object's type color. This rule applies consistently across Graph cards, Navigator, Workspace headers, lists, search results, and future Synthesize Mode.
 
 Default:
-- Business Problem: white / neutral border
-- Research Question: neutral gray-white
-- Dataset: purple
-- Study: blue
-- Result: orange
-- Insight: green
-- Recommendation: brown
+- Business Problem: neutral/slate accent with a very light slate tint
+- Research Question: restrained warm amber accent with a pale warm-yellow tint
+- Dataset: purple accent with a pale lavender tint
+- Study: blue accent with a pale sky-blue tint
+- Result: orange accent with a pale warm-orange tint
+- Insight: green accent with a pale green tint
+- Recommendation: brown accent with a pale warm-brown tint
+
+Every Graph Object card uses its Object Type accent plus a very light background tint from the same color family. Fills remain low-saturation and status never changes the fill color. Hover strengthens the type border/tint; selection remains a separate, slightly stronger type-tinted state.
 
 Users may customize object colors.
 

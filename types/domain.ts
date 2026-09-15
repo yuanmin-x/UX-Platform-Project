@@ -49,6 +49,8 @@ export type Relationship = {
   source_object_id: string;
   target_object_id: string;
   label: string | null;
+  source_handle: string | null;
+  target_handle: string | null;
 };
 
 export type ProjectGraph = {

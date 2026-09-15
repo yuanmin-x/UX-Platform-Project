@@ -1,4 +1,4 @@
-import { createRelationship, deleteRelationship } from "@/lib/domain/project-service";
+import { createRelationship, deleteRelationship, updateRelationship } from "@/lib/domain/project-service";
 import { NextResponse } from "next/server";
 
 export async function POST(
@@ -25,6 +25,21 @@ export async function DELETE(
 
     await deleteRelationship(projectId, relationshipId);
     return new NextResponse(null, { status: 204 });
+  } catch (error) {
+    return NextResponse.json({ error: getMessage(error) }, { status: 400 });
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ projectId: string }> },
+) {
+  try {
+    const { projectId } = await context.params;
+    const { relationshipId, ...changes } = (await request.json()) as { relationshipId?: unknown };
+    if (typeof relationshipId !== "string") throw new Error("A relationship ID is required.");
+
+    return NextResponse.json(await updateRelationship(projectId, relationshipId, changes));
   } catch (error) {
     return NextResponse.json({ error: getMessage(error) }, { status: 400 });
   }

@@ -19,11 +19,13 @@ export async function PATCH(
         !("y" in position) ||
         typeof position.objectId !== "string" ||
         typeof position.x !== "number" ||
-        typeof position.y !== "number"
+        typeof position.y !== "number" ||
+        ("width" in position && typeof position.width !== "number") ||
+        ("height" in position && typeof position.height !== "number")
       ) {
         throw new Error("Every position must contain objectId, x, and y.");
       }
-      return position;
+      return position as { objectId: string; x: number; y: number; width?: number; height?: number };
     });
 
     await savePositions(projectId, positions);
