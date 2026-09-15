@@ -1,4 +1,5 @@
 import { formatStatus, isCompletionStatus, objectTypeConfig } from "@/lib/domain/object-types";
+import { getStudyType, studyTypeConfig } from "@/lib/domain/study-types";
 import type { ResearchObject } from "@/types/domain";
 import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react";
 
@@ -42,6 +43,7 @@ export function ResearchObjectNode({ data, selected }: NodeProps) {
       ))}
       <div className="node-type">{config.label}</div>
       <strong>{object.title}</strong>
+      {object.type === "study" && <span className="node-study-type">{studyTypeConfig[getStudyType(object.metadata)].label}</span>}
       {selected && config.validStatuses.length > 0 ? (
         <button
           className="node-status"

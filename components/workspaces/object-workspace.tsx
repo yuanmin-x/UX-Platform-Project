@@ -2,8 +2,9 @@
 
 import { NavigatorObjectNode, type NavigatorNodeData } from "@/components/graph/navigator-object-node";
 import { AppShell } from "@/components/ui/app-shell";
+import { StudyWorkspace, type StudySection } from "@/components/workspaces/study-workspace";
 import { formatStatus, isCompletionStatus, objectTypeConfig } from "@/lib/domain/object-types";
-import type { ProjectGraph } from "@/types/domain";
+import type { ProjectGraph, ResearchObject } from "@/types/domain";
 import { Background, type Edge, type Node, ReactFlow, ReactFlowProvider, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Link from "next/link";
@@ -16,22 +17,37 @@ const navigatorNodeWidth = 180;
 const navigatorNodeHeight = 72;
 const navigatorCoordinateScale = 0.58;
 
-export function ObjectWorkspace({ graph, objectId }: { graph: ProjectGraph; objectId: string }) {
+export function ObjectWorkspace({ graph, objectId, studySection = "overview" }: { graph: ProjectGraph; objectId: string; studySection?: StudySection }) {
   return (
     <ReactFlowProvider>
-      <ObjectWorkspaceCanvas graph={graph} objectId={objectId} />
+      <ObjectWorkspaceCanvas graph={graph} objectId={objectId} studySection={studySection} />
     </ReactFlowProvider>
   );
 }
 
-function ObjectWorkspaceCanvas({ graph, objectId }: { graph: ProjectGraph; objectId: string }) {
+function ObjectWorkspaceCanvas({ graph: initialGraph, objectId, studySection }: { graph: ProjectGraph; objectId: string; studySection: StudySection }) {
   const router = useRouter();
+  const [graph, setGraph] = useState(initialGraph);
   const [navigatorWidth, setNavigatorWidth] = useState(300);
   const [navigatorHidden, setNavigatorHidden] = useState(false);
   const [resizingNavigator, setResizingNavigator] = useState(false);
   const [pinnedObjectId, setPinnedObjectId] = useState<string | null>(null);
   const [pinsLoaded, setPinsLoaded] = useState(false);
   const [navigatorInstance, setNavigatorInstance] = useState<ReactFlowInstance<NavigatorNode, Edge> | null>(null);
+
+  useEffect(() => setGraph(initialGraph), [initialGraph]);
+
+  const applyIntrinsicObjectUpdate = useCallback((updatedObject: ResearchObject) => {
+    setGraph((currentGraph) => ({
+      ...currentGraph,
+      projectObjects: currentGraph.projectObjects.map((projectObject) =>
+        projectObject.object_id === updatedObject.id
+          ? { ...projectObject, objects: updatedObject }
+          : projectObject,
+      ),
+    }));
+  }, []);
+
   const currentObject = graph.projectObjects.find((projectObject) => projectObject.object_id === objectId)?.objects;
   const config = currentObject ? objectTypeConfig[currentObject.type] : null;
 
@@ -225,19 +241,25 @@ function ObjectWorkspaceCanvas({ graph, objectId }: { graph: ProjectGraph; objec
           )}
 
           <main className="workspace-main">
-            <div className="workspace-object-header" style={{ "--object-color": config.color, "--object-surface": config.surface } as React.CSSProperties}>
-              <span className="workspace-object-type">{config.label}</span>
-              <h1>{currentObject.title}</h1>
-              <span className="workspace-status">
-                {isCompletionStatus(status) && <span aria-hidden="true">✓ </span>}
-                {formatStatus(status, config.defaultStatus)}
-              </span>
-            </div>
-            <section className="workspace-placeholder" aria-label={`${config.label} workspace`}>
-              <p className="eyebrow">Workspace shell</p>
-              <h2>{config.label} workspace</h2>
-              <p>Detailed work for this Object will appear here in a later milestone. The Navigator keeps the Project reasoning context available while you work.</p>
-            </section>
+            {currentObject.type === "study" ? (
+              <StudyWorkspace graph={graph} onObjectUpdated={applyIntrinsicObjectUpdate} section={studySection} study={currentObject} />
+            ) : (
+              <>
+                <div className="workspace-object-header" style={{ "--object-color": config.color, "--object-surface": config.surface } as React.CSSProperties}>
+                  <span className="workspace-object-type">{config.label}</span>
+                  <h1>{currentObject.title}</h1>
+                  <span className="workspace-status">
+                    {isCompletionStatus(status) && <span aria-hidden="true">✓ </span>}
+                    {formatStatus(status, config.defaultStatus)}
+                  </span>
+                </div>
+                <section className="workspace-placeholder" aria-label={`${config.label} workspace`}>
+                  <p className="eyebrow">Workspace shell</p>
+                  <h2>{config.label} workspace</h2>
+                  <p>Detailed work for this Object will appear here in a later milestone. The Navigator keeps the Project reasoning context available while you work.</p>
+                </section>
+              </>
+            )}
           </main>
         </div>
       </section>

@@ -5,6 +5,7 @@ import { ResearchRelationshipEdge, type RelationshipEdge, type RelationshipEdgeD
 import { AppShell } from "@/components/ui/app-shell";
 import { formatStatus, objectTypeConfig } from "@/lib/domain/object-types";
 import { arrangeGraph } from "@/lib/domain/graph-layout";
+import { studyTypeConfig, type StudyType } from "@/lib/domain/study-types";
 import type { ObjectType, ProjectGraph as ProjectGraphData, ResearchObject } from "@/types/domain";
 import {
   applyNodeChanges,
@@ -28,7 +29,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type ResearchGraphNode = Node<GraphNodeData, "researchObject">;
-type ObjectForm = { type: ObjectType; title: string };
+type ObjectForm = { type: ObjectType; title: string; studyType: StudyType };
 type ExistingObjectOption = { id: string; type: ObjectType; title: string; status: string | null; projects: Array<{ id: string; name: string }> };
 const minimumNodeWidth = 200;
 const minimumNodeHeight = 112;
@@ -36,6 +37,7 @@ const minimumNodeHeight = 112;
 const initialObjectForm: ObjectForm = {
   type: "research_question",
   title: "",
+  studyType: "generic",
 };
 
 export function ProjectGraph({ projectId }: { projectId: string }) {
@@ -52,6 +54,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
   const [nodes, setNodes] = useState<ResearchGraphNode[]>([]);
   const [edges, setEdges] = useState<RelationshipEdge[]>([]);
   const [edgeMenu, setEdgeMenu] = useState<{ edgeId: string; x: number; y: number } | null>(null);
+  const [objectMenu, setObjectMenu] = useState<{ objectId: string; x: number; y: number } | null>(null);
   const [statusMenu, setStatusMenu] = useState<{ objectId: string; x: number; y: number } | null>(null);
   const [form, setForm] = useState<ObjectForm>(initialObjectForm);
   const [showAddObject, setShowAddObject] = useState(false);
@@ -70,6 +73,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
 
   const openStatusMenu = useCallback((objectId: string, position: { x: number; y: number }) => {
     setEdgeMenu(null);
+    setObjectMenu(null);
     setStatusMenu({ objectId, ...position });
   }, []);
 
@@ -117,7 +121,15 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
 
   const openEdgeMenu = useCallback((relationshipId: string, position: { x: number; y: number }) => {
     setStatusMenu(null);
+    setObjectMenu(null);
     setEdgeMenu({ edgeId: relationshipId, ...position });
+  }, []);
+
+  const openObjectMenu = useCallback((objectId: string, position: { x: number; y: number }) => {
+    setStatusMenu(null);
+    setEdgeMenu(null);
+    setObjectMenu({ objectId, ...position });
+    setNodes((currentNodes) => currentNodes.map((node) => ({ ...node, selected: node.id === objectId })));
   }, []);
 
   const openInlineLabelEditor = useCallback((relationshipId: string) => {
@@ -331,6 +343,74 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
     [loadGraph, projectId],
   );
 
+  const removeObjectFromProject = useCallback(
+    async (objectId: string) => {
+      setError(null);
+      try {
+        const response = await fetch(`/api/projects/${projectId}/objects`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ objectId }),
+        });
+        if (!response.ok) {
+          const body = (await response.json()) as { error?: string };
+          throw new Error(body.error ?? "Unable to remove Object from this Project.");
+        }
+        setNodes((currentNodes) => currentNodes.filter((node) => node.id !== objectId));
+        setEdges((currentEdges) => currentEdges.filter((edge) => edge.source !== objectId && edge.target !== objectId));
+        setGraph((currentGraph) =>
+          currentGraph
+            ? {
+                ...currentGraph,
+                projectObjects: currentGraph.projectObjects.filter((projectObject) => projectObject.object_id !== objectId),
+                relationships: currentGraph.relationships.filter(
+                  (relationship) => relationship.source_object_id !== objectId && relationship.target_object_id !== objectId,
+                ),
+              }
+            : currentGraph,
+        );
+        setObjectMenu(null);
+      } catch (caughtError) {
+        setError(getMessage(caughtError));
+        await loadGraph();
+      }
+    },
+    [loadGraph, projectId],
+  );
+
+  const requestObjectRemoval = useCallback(
+    (objectId: string) => {
+      const relationshipCount = edges.filter((edge) => edge.source === objectId || edge.target === objectId).length;
+      if (relationshipCount > 0) {
+        const relationshipText = relationshipCount === 1 ? "one Project relationship" : `${relationshipCount} Project relationships`;
+        if (!window.confirm(`Remove from this Project? This will also remove ${relationshipText}. The Object will remain available in other Projects.`)) return;
+      }
+      void removeObjectFromProject(objectId);
+    },
+    [edges, removeObjectFromProject],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], .relationship-label-input")) return;
+      const selectedObject = nodes.find((node) => node.selected);
+      if (selectedObject) {
+        event.preventDefault();
+        requestObjectRemoval(selectedObject.id);
+        return;
+      }
+      const selectedRelationshipIds = edges.filter((edge) => edge.selected).map((edge) => edge.id);
+      if (selectedRelationshipIds.length) {
+        event.preventDefault();
+        void deleteRelationships(selectedRelationshipIds);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deleteRelationships, edges, nodes, requestObjectRemoval]);
+
   const statusMenuObject = statusMenu
     ? nodes.find((node) => node.id === statusMenu.objectId)?.data.object
     : null;
@@ -380,7 +460,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
     setError(null);
     try {
       const position = nextObjectPosition(nodes);
-      const payload = { type: form.type, title: form.title, ...position };
+      const payload = { type: form.type, title: form.title, ...(form.type === "study" ? { studyType: form.studyType } : {}), ...position };
       const response = await fetch(`/api/projects/${projectId}/objects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -388,7 +468,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to add object.");
-      setForm((currentForm) => ({ ...currentForm, title: "" }));
+      setForm((currentForm) => ({ ...currentForm, title: "", ...(currentForm.type === "study" ? { studyType: "generic" } : {}) }));
       await loadGraph();
     } catch (caughtError) {
       setError(getMessage(caughtError));
@@ -441,6 +521,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
             aria-label="Project reasoning graph"
             onClick={() => {
               setEdgeMenu(null);
+              setObjectMenu(null);
               setStatusMenu(null);
             }}
           >
@@ -483,6 +564,19 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
                   placeholder={objectTypeConfig[form.type].namePlaceholder}
                 />
               </label>
+              {form.type === "study" && (
+                <label>
+                  Study Type
+                  <select
+                    value={form.studyType}
+                    onChange={(event) => setForm({ ...form, studyType: event.target.value as StudyType })}
+                  >
+                    {Object.entries(studyTypeConfig).map(([type, config]) => (
+                      <option key={type} value={type}>{config.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="graph-add-actions">
                 <button disabled={submitting} type="submit">
                   {submitting ? "Saving…" : "Create Object"}
@@ -530,7 +624,7 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
                 edgeTypes={edgeTypes}
                 edgesFocusable
                 connectionMode={ConnectionMode.Loose}
-                deleteKeyCode={["Backspace", "Delete"]}
+                deleteKeyCode={null}
                 fitView
                 minZoom={0.2}
                 nodeTypes={nodeTypes}
@@ -543,6 +637,10 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
                   openEdgeMenu(edge.id, { x: event.clientX, y: event.clientY });
                 }}
                 onNodeClick={() => setEdges((currentEdges) => currentEdges.map((edge) => ({ ...edge, selected: false })))}
+                onNodeContextMenu={(event, node) => {
+                  event.preventDefault();
+                  openObjectMenu(node.id, { x: event.clientX, y: event.clientY });
+                }}
                 onNodeDoubleClick={openWorkspace}
                 onNodeDragStop={saveNodePosition}
                 onNodesChange={onNodesChange}
@@ -582,6 +680,13 @@ function ProjectGraphCanvas({ projectId }: { projectId: string }) {
                 </button>
                 <button onClick={() => void deleteRelationships([edgeMenu.edgeId])} role="menuitem" type="button">
                   Delete relationship
+                </button>
+              </div>
+            )}
+            {objectMenu && (
+              <div className="edge-menu object-menu" role="menu" style={{ left: objectMenu.x, top: objectMenu.y }}>
+                <button onClick={() => requestObjectRemoval(objectMenu.objectId)} role="menuitem" type="button">
+                  Remove from Project
                 </button>
               </div>
             )}

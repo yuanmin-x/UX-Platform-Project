@@ -1,4 +1,5 @@
 import { objectTypeConfig } from "@/lib/domain/object-types";
+import { isStudyType } from "@/lib/domain/study-types";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 import type {
   ObjectType,
@@ -23,10 +24,11 @@ function assertObjectType(value: unknown): asserts value is ObjectType {
   }
 }
 
-function assertObjectId(value: string) {
+function assertObjectId(value: unknown) {
+  if (typeof value !== "string") throw new Error("A valid Object ID is required.");
   const objectId = value.trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(objectId)) {
-    throw new Error("A valid Object ID is required to attach an existing Object.");
+    throw new Error("A valid Object ID is required.");
   }
   return objectId;
 }
@@ -136,6 +138,7 @@ export async function createOrAttachObject(
     type?: unknown;
     title?: unknown;
     description?: unknown;
+    studyType?: unknown;
     x?: unknown;
     y?: unknown;
   },
@@ -176,6 +179,9 @@ export async function createOrAttachObject(
   assertObjectType(input.type);
   const title = assertTitle(input.title);
   const description = typeof input.description === "string" ? input.description.trim() : "";
+  if (input.type === "study" && input.studyType !== undefined && !isStudyType(input.studyType)) {
+    throw new Error("A valid Study Type is required.");
+  }
   const { data: object, error: objectError } = await supabase
     .from("objects")
     .insert({
@@ -183,6 +189,7 @@ export async function createOrAttachObject(
       title,
       description,
       status: objectTypeConfig[input.type].defaultStatus,
+      metadata: input.type === "study" ? { studyType: input.studyType ?? "generic" } : {},
     })
     .select("id")
     .single();
@@ -202,6 +209,39 @@ export async function createOrAttachObject(
   }
 
   return object.id as string;
+}
+
+/**
+ * Removes only the current Project's membership and relationships. Object
+ * identity and memberships/relationships in other Projects remain intact.
+ */
+export async function removeObjectFromProject(projectId: string, objectId: unknown) {
+  const normalizedObjectId = assertObjectId(objectId);
+  const supabase = getSupabaseAdmin();
+  const { data: membership, error: membershipError } = await supabase
+    .from("project_objects")
+    .select("object_id")
+    .eq("project_id", projectId)
+    .eq("object_id", normalizedObjectId)
+    .maybeSingle();
+  if (membershipError) throw membershipError;
+  if (!membership) throw new Error("This Object is not attached to this Project.");
+
+  const { error: relationshipError } = await supabase
+    .from("relationships")
+    .delete()
+    .eq("project_id", projectId)
+    .or(`source_object_id.eq.${normalizedObjectId},target_object_id.eq.${normalizedObjectId}`);
+  if (relationshipError) throw relationshipError;
+
+  const { data, error: removalError } = await supabase
+    .from("project_objects")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("object_id", normalizedObjectId)
+    .select("object_id");
+  if (removalError) throw removalError;
+  if (!data?.length) throw new Error("Unable to remove this Object from the Project.");
 }
 
 export async function createRelationship(
@@ -305,6 +345,71 @@ export async function updateObjectStatus(objectId: string, status: unknown) {
     .select("*")
     .single();
 
+  if (error) throw error;
+  return data as ResearchObject;
+}
+
+export async function updateStudyDetails(
+  objectId: string,
+  input: {
+    title?: unknown;
+    status?: unknown;
+    description?: unknown;
+    studyType?: unknown;
+    startDate?: unknown;
+    endDate?: unknown;
+    methodNotes?: unknown;
+  },
+) {
+  const supabase = getSupabaseAdmin();
+  const { data: existing, error: existingError } = await supabase
+    .from("objects")
+    .select("*")
+    .eq("id", objectId)
+    .single();
+  if (existingError) throw existingError;
+  if (existing.type !== "study") throw new Error("Only Study Objects can use Study details.");
+
+  const update: Record<string, unknown> = {};
+  if ("title" in input) update.title = assertTitle(input.title, "Study name");
+  if ("status" in input) {
+    if (typeof input.status !== "string" || !objectTypeConfig.study.validStatuses.includes(input.status)) {
+      throw new Error("This status is not valid for a Study.");
+    }
+    update.status = input.status;
+  }
+  if ("description" in input) {
+    if (typeof input.description !== "string") throw new Error("Description must be text.");
+    update.description = input.description.trim();
+  }
+
+  const existingMetadata = (existing.metadata ?? {}) as Record<string, unknown>;
+  const metadata = { ...existingMetadata };
+  let metadataChanged = false;
+  if ("studyType" in input) {
+    if (!isStudyType(input.studyType)) throw new Error("A valid Study Type is required.");
+    metadata.studyType = input.studyType;
+    metadataChanged = true;
+  }
+  for (const [key, value] of [["startDate", input.startDate], ["endDate", input.endDate], ["methodNotes", input.methodNotes]] as const) {
+    if (key in input) {
+      if (typeof value !== "string") throw new Error(`${key} must be text.`);
+      if ((key === "startDate" || key === "endDate") && value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new Error(`${key} must be a valid date.`);
+      }
+      metadata[key] = value.trim() || null;
+      metadataChanged = true;
+    }
+  }
+  if (metadataChanged) update.metadata = metadata;
+  if (!Object.keys(update).length) throw new Error("No Study changes were provided.");
+
+  const { data, error } = await supabase
+    .from("objects")
+    .update(update)
+    .eq("id", objectId)
+    .select("*")
+    .single();
   if (error) throw error;
   return data as ResearchObject;
 }
